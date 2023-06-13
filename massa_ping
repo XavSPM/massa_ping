@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Function to handle SIGINT
+trap 'echo -e "\nInterruption détectée, arrêt du script."; exit 1' SIGINT
+
+# Ask for password
+echo -e "Veuillez entrer le mot de passe de massa-client: \c"
+
+# Disable echo
+stty -echo
+
+password=""
+while IFS= read -r -n1 -s char
+do
+    if [[ -z $char ]]
+    then
+        # Break if end of input
+        echo
+        break
+    elif [[ $char == $'\x7f' ]]
+    then
+        # Handle backspace
+        if [[ -n $password ]]
+        then
+            # Delete last char from password
+            password=${password:0:-1}
+            # Delete last * from output
+            echo -ne "\b \b"
+        fi
+    else
+        # Append char to password and print *
+        password+=$char
+        echo -n "*"
+    fi
+done
+
+# Enable echo
+stty echo
+
+echo "start"
+
+# Get the list of IP addresses
+ips=$(./massa-client -p $password get_status | grep "IP address" | awk -F " " '{print $7}')
+
+# For each IP in the list, do the ping
+for ip in $ips
+do
+    if echo $ip | grep -q "::ffff:"
+    then
+        # This is an IPv4 address mapped in IPv6, remove the prefix and use ping
+        ip=${ip/::ffff:/}
+        ping_command="ping"
+    elif echo $ip | grep -q ":"
+    then
+        # This is an IPv6 address
+        ping_command="ping6"
+    else
+        # This is an IPv4 address
+        ping_command="ping"
+    fi
+    ping_result=$($ping_command -c 10 $ip | tail -n 1)
+    echo "ip : "$ip" ==> $ping_result"
+done
