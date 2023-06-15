@@ -1,63 +1,125 @@
 #!/bin/bash
 
-# Function to handle SIGINT
-trap 'echo -e "\nInterruption détectée, arrêt du script."; exit 1' SIGINT
+# A script that pings all the massa node you are connected to
 
-# Ask for password
-echo -e "Veuillez entrer le mot de passe de massa-client: \c"
+number_of_ping=5
 
-# Disable echo
-stty -echo
+function read_password(){
+    # Ask for password
+    echo "password not found"
+    echo -e "Please enter massa-client password: \c"
+    
+    # Disable echo
+    stty -echo
+    password=""
 
-password=""
-while IFS= read -r -n1 -s char
-do
-    if [[ -z $char ]]
-    then
-        # Break if end of input
-        echo
-        break
-    elif [[ $char == $'\x7f' ]]
-    then
-        # Handle backspace
-        if [[ -n $password ]]
+    while IFS= read -r -n1 -s char
+    do
+        if [[ -z $char ]]
         then
-            # Delete last char from password
-            password=${password:0:-1}
-            # Delete last * from output
-            echo -ne "\b \b"
+            # Break if end of input
+            echo
+            break
+        elif [[ $char == $'\x7f' ]]
+        then
+            # Handle backspace
+            if [[ -n $password ]]
+            then
+                # Delete last char from password
+                password=${password:0:-1}
+                # Delete last * from output
+                echo -ne "\b \b"
+            fi
+        else
+            # Append char to password and print *
+            password+=$char
+            echo -n "*"
         fi
-    else
-        # Append char to password and print *
-        password+=$char
-        echo -n "*"
+    done
+    # Enable echo
+    stty echo
+}
+
+function get_password(){
+    # note about the regexp used
+    
+    # the -o print only matching
+    # The -P option enables Perl-compatible regex
+    # \K reset matching to drop "-p"
+    # 
+    # The regular expression \-p\s+\K[^[:space:]]+ matches the literal "-p" followed by one or more whitespace characters, and \K resets the match. Then, [^[:space:]]+ matches one or more non-whitespace characters, which is the desired argument.
+    # retrieve password from the massa-client command line
+    password=$(pgrep -a massa-client | grep massa-client |  grep -oP '\-p\s+\K[^[:space:]]+')
+    [[ -z "$password" ]] && read_password
+}
+
+
+
+function ping_it() {
+    ping_command=$1
+    ip=$2
+    ping_result=$($ping_command -c "$number_of_ping" "$2" | tail -n 1)
+    printf "ip:%38s => %s\n" "$2" "$ping_result"
+}
+
+function ping_all(){
+    # For each IP in the list, do the ping
+    for ip in $ips
+    do
+        echo -n "."
+        if echo "$ip" | grep -q "::ffff:"
+        then
+            # This is an IPv4 address mapped in IPv6, remove the prefix and use ping
+            ip=${ip/::ffff:/}
+            ping_command="ping"
+        elif echo "$ip" | grep -q ":"
+        then
+            # This is an IPv6 address
+            ping_command="ping6"
+        else
+            # This is an IPv4 address
+            ping_command="ping"
+        fi
+        ping_it $ping_command $ip &
+    done
+    echo
+    
+    # wait for // pids
+    wait
+}
+
+function search_massa_client(){
+    massa_client=""
+    if [[ -e ./massa-client ]];then
+    	massa_client="./massa-client"
     fi
-done
+    if [[ -e ~/massa/massa-client/massa-client ]];then
+        cd ~/massa/massa-client
+    	massa_client="~/massa/massa-client/massa-client"
+    fi
+    
+    if [[ -z "$massa_client" ]];then
+    	echo "massa-client not found"
+    	exit 1
+    fi
+}
 
-# Enable echo
-stty echo
+# Function to handle SIGINT
+trap 'echo -e "\nCtrl-C detected, exit."; exit 1' SIGINT
 
-echo "start"
+search_massa_client
+get_password
+
+echo "start ping"
 
 # Get the list of IP addresses
-ips=$(./massa-client -p $password get_status | grep "IP address" | awk -F " " '{print $7}')
+ips=$(./massa-client -p "$password" get_status | grep "IP address" | awk -F " " '{print $7}')
+if [[ -z "$ips" ]];then
+	echo "sorry cannot find peers with massa-client, debug :"
+	./massa-client -p "$password" get_status | grep "IP address"
+	exit 1
+fi
 
-# For each IP in the list, do the ping
-for ip in $ips
-do
-    if echo $ip | grep -q "::ffff:"
-    then
-        # This is an IPv4 address mapped in IPv6, remove the prefix and use ping
-        ip=${ip/::ffff:/}
-        ping_command="ping"
-    elif echo $ip | grep -q ":"
-    then
-        # This is an IPv6 address
-        ping_command="ping6"
-    else
-        # This is an IPv4 address
-        ping_command="ping"
-    fi
-    ping_result=$($ping_command -c 10 $ip | tail -n 1)
-    echo "ip : "$ip" ==> $ping_result"
-done
+ping_all
+
+echo "END"
